@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Relatório — Contas a Pagar</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="./style.css">
+</head>
+
+<body>
+
+    <header>
+        <div>
+            <div class="header-sub">RELATÓRIO FINANCEIRO</div>
+            <h1>Contas <span>a Pagar</span></h1>
+        </div>
+    </header>
+
+    <div class="kpis" id="kpiBar">
+        <!-- preenchido via JS -->
+    </div>
+
+    <div class="filter-bar">
+        <div class="filter-title">⟡ Filtros</div>
+        <div class="filter-grid">
+            <div class="filter-group">
+                <label>Vencimento — De</label>
+                <input type="date" id="dateFrom">
+            </div>
+            <div class="filter-group">
+                <label>Vencimento — Até</label>
+                <input type="date" id="dateTo">
+            </div>
+            <div class="filter-group">
+                <label>Fornecedor / Beneficiado</label>
+                <select id="fornecedorFilter">
+                    <option value="">— Todos —</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Status</label>
+                <select id="statusFilter">
+                    <option value="">— Todos —</option>
+                    <option value="vencido">Vencido</option>
+                    <option value="hoje">Vence Hoje</option>
+                    <option value="futuro">A Vencer</option>
+                </select>
+            </div>
+            <div class="filter-actions">
+                <button class="btn btn-primary" onclick="aplicarFiltros()">Filtrar</button>
+                <button class="btn btn-secondary" onclick="resetFiltros()">Limpar</button>
+                <button class="btn btn-serrinha" id="btnSerrinha" onclick="toggleSerrinha()">
+                    📍 Serrinha
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="options-row">
+        <div>
+            <div class="toggle-group">
+                <button class="toggle-btn active" id="btnSemGrupo" onclick="setAgrupamento('none')">Sem
+                    Agrupamento</button>
+                <button class="toggle-btn" id="btnGrupoForn" onclick="setAgrupamento('fornecedor')">Por
+                    Fornecedor</button>
+                <button class="toggle-btn" id="btnGrupoMes" onclick="setAgrupamento('mes')">Por Mês</button>
+            </div>
+        </div>
+        <span class="badge-serrinha" id="badgeSerrinha">📍 Fornecedores de Serrinha</span>
+        <span class="result-info" id="resultInfo"></span>
+    </div>
+
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr id="tableHead"></tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+    </div>
+    <pre id="output"></pre>
+
+    <script src="./script.js"></script>
+    <script>
+        // ──────────────────────────────────────────────
+        // DATA
+        // ──────────────────────────────────────────────
+        // ──────────────────────────────────────────────
+        // CARREGAMENTO DINÂMICO DE DADOS (CSV)
+        // ──────────────────────────────────────────────
+
+        let CONTAS = [];
+        let FORNECEDORES = [];
+
+        // Função para converter CSV em Array de Objetos
+        function csvToJSON(csvText) {
+            const lines = csvText.trim().split(/\r?\n/);
+            const headers = lines[0].split(';');
+            return lines.slice(1).map(line => {
+                const values = line.split(';');
+                return headers.reduce((obj, header, i) => {
+                    let val = values[i] ? values[i].trim() : null;
+                    // Limpeza básica de aspas se existirem
+                    if (val) val = val.replace(/^"|"$/g, '');
+                    obj[header.trim()] = val;
+                    return obj;
+                }, {});
+            });
+        }
+
+        // Função principal para carregar os arquivos e iniciar o sistema
+        async function inicializarSistema() {
+            try {
+                // Carrega os dois arquivos simultaneamente
+                const [resContas, resFornecedores] = await Promise.all([
+                    fetch('relatorio_contas_a_pagar.csv'),
+                    fetch('fornecedores.csv')
+                ]);
+
+                if (!resContas.ok || !resFornecedores.ok) {
+                    throw new Error("Erro ao carregar os arquivos CSV. Verifique se os nomes estão corretos.");
+                }
+
+                const textoContas = await resContas.text();
+                const textoFornecedores = await resFornecedores.text();
+
+                // Processa os dados
+                CONTAS = csvToJSON(textoContas);
+                FORNECEDORES = csvToJSON(textoFornecedores);
+
+                console.log("Dados carregados com sucesso:", { contas: CONTAS.length, fornecedores: FORNECEDORES.length });
+
+                // Chama a função que renderiza seu relatório (ajuste o nome se necessário)
+                // No seu caso, provavelmente é a função que inicia os filtros ou a tabela:
+                init();
+
+            } catch (error) {
+                console.error("Falha na inicialização:", error);
+                document.getElementById('tableBody').innerHTML = `
+            <tr><td colspan="10" style="text-align:center; padding:50px; color:var(--danger)">
+                Erro ao carregar dados: ${error.message}
+            </td></tr>`;
+            }
+        }
+
+        // Inicia o processo
+        inicializarSistema();
+
+
+        // ──────────────────────────────────────────────
+        // HELPERS
+        // ──────────────────────────────────────────────
+        function parseVal(str) {
+            if (!str) return 0;
+            return parseFloat(String(str).replace(/\./g, '').replace(',', '.')) || 0;
+        }
+        function parseDt(str) {
+            if (!str) return null;
+            const [d, m, y] = str.split('/');
+            return new Date(y, m - 1, d);
+        }
+        function fmtVal(n) {
+            return 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        function fmtDt(str) { return str || '-'; }
+
+        const TODAY = new Date(); TODAY.setHours(0, 0, 0, 0);
+        const SERRINHA_CNPJ = new Set(FORNECEDORES.map(f => f['CPF/CNPJ']).filter(Boolean));
+
+        function getStatus(row) {
+            const dt = parseDt(row['Vencimento']);
+            if (!dt) return 'ok';
+            const d = new Date(dt); d.setHours(0, 0, 0, 0);
+            if (d < TODAY) return 'vencido';
+            if (d.getTime() === TODAY.getTime()) return 'hoje';
+            return 'ok';
+        }
+        function isSerrinha(row) {
+            if (!row['CPF/CNPJ']) return false;
+            return SERRINHA_CNPJ.has(row['CPF/CNPJ']);
+        }
+
+        // ──────────────────────────────────────────────
+        // STATE
+        // ──────────────────────────────────────────────
+        let agrupamento = 'none';
+        let filtroSerrinha = false;
+        let sortCol = 'Vencimento', sortAsc = true;
+        let filtros = {};
+
+        // ──────────────────────────────────────────────
+        // INIT
+        // ──────────────────────────────────────────────
+        function init() {
+            // populate fornecedor select
+            const fSel = document.getElementById('fornecedorFilter');
+            const bens = [...new Set(CONTAS.map(c => c['Beneficiado']))].sort();
+            bens.forEach(b => {
+                const o = document.createElement('option');
+                o.value = b; o.textContent = b;
+                fSel.appendChild(o);
+            });
+
+            buildHead();
+            renderAll();
+        }
+
+        // ──────────────────────────────────────────────
+        // FILTER
+        // ──────────────────────────────────────────────
+        function getFiltered() {
+            return CONTAS.filter(row => {
+                const dt = parseDt(row['Vencimento']);
+                if (filtros.dateFrom) {
+                    const from = new Date(filtros.dateFrom);
+                    if (dt < from) return false;
+                }
+                if (filtros.dateTo) {
+                    const to = new Date(filtros.dateTo); to.setHours(23, 59, 59);
+                    if (dt > to) return false;
+                }
+                const val = parseVal(row['Total']);
+                if (filtros.fornecedor && row['Beneficiado'] !== filtros.fornecedor) return false;
+                if (filtros.status) {
+                    const s = getStatus(row);
+                    if (filtros.status !== s) return false;
+                }
+                if (filtroSerrinha && !isSerrinha(row)) return false;
+                return true;
+            });
+        }
+
+        function aplicarFiltros() {
+            filtros = {
+                dateFrom: document.getElementById('dateFrom').value,
+                dateTo: document.getElementById('dateTo').value,
+                fornecedor: document.getElementById('fornecedorFilter').value,
+                status: document.getElementById('statusFilter').value,
+            };
+            renderAll();
+        }
+
+        function resetFiltros() {
+            document.getElementById('dateFrom').value = '';
+            document.getElementById('dateTo').value = '';
+            document.getElementById('fornecedorFilter').value = '';
+            document.getElementById('statusFilter').value = '';
+            filtroSerrinha = false;
+            document.getElementById('btnSerrinha').classList.remove('active');
+            document.getElementById('badgeSerrinha').style.display = 'none';
+            filtros = {};
+            renderAll();
+        }
+
+        function toggleSerrinha() {
+            filtroSerrinha = !filtroSerrinha;
+            document.getElementById('btnSerrinha').classList.toggle('active', filtroSerrinha);
+            document.getElementById('badgeSerrinha').style.display = filtroSerrinha ? 'inline-block' : 'none';
+            renderAll();
+        }
+
+        // ──────────────────────────────────────────────
+        // AGRUPAMENTO
+        // ──────────────────────────────────────────────
+        function setAgrupamento(v) {
+            agrupamento = v;
+            document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+            const map = { none: 'btnSemGrupo', fornecedor: 'btnGrupoForn', mes: 'btnGrupoMes' };
+            document.getElementById(map[v]).classList.add('active');
+            renderAll();
+        }
+
+        // ──────────────────────────────────────────────
+        // SORT
+        // ──────────────────────────────────────────────
+        function sortBy(col) {
+            if (sortCol === col) sortAsc = !sortAsc;
+            else { sortCol = col; sortAsc = true; }
+            renderAll();
+        }
+
+        function sortData(data) {
+            return [...data].sort((a, b) => {
+                let va = a[sortCol], vb = b[sortCol];
+                if (sortCol === 'Vencimento' || sortCol === 'Emissão') {
+                    va = parseDt(va); vb = parseDt(vb);
+                    if (!va) return 1; if (!vb) return -1;
+                    return sortAsc ? va - vb : vb - va;
+                }
+                if (sortCol === 'Total' || sortCol === 'Valor' || sortCol === 'Atraso') {
+                    va = parseVal(va); vb = parseVal(vb);
+                    return sortAsc ? va - vb : vb - va;
+                }
+                va = String(va || ''); vb = String(vb || '');
+                return sortAsc ? va.localeCompare(vb, 'pt-BR') : vb.localeCompare(va, 'pt-BR');
+            });
+        }
+
+        // ──────────────────────────────────────────────
+        // KPIs
+        // ──────────────────────────────────────────────
+        function renderKPIs(data) {
+            const total = data.reduce((s, r) => s + parseVal(r['Total']), 0);
+            const vencidos = data.filter(r => getStatus(r) === 'vencido');
+            const hoje = data.filter(r => getStatus(r) === 'hoje');
+            const serrRows = data.filter(r => isSerrinha(r));
+            const kpiBar = document.getElementById('kpiBar');
+            kpiBar.innerHTML = `
+        <div class="kpi" style="--kpi-color:#4f8ef7">
+        <div class="kpi-label">Total Geral</div>
+        <div class="kpi-value">${fmtVal(total)}</div>
+        <div class="kpi-sub">${data.length} títulos</div>
+        </div>
+        <div class="kpi" style="--kpi-color:#f7604f">
+        <div class="kpi-label">Vencidos</div>
+        <div class="kpi-value" style="color:var(--danger)">${fmtVal(vencidos.reduce((s, r) => s + parseVal(r['Total']), 0))}</div>
+        <div class="kpi-sub">${vencidos.length} títulos</div>
+        </div>
+        <div class="kpi" style="--kpi-color:#f7b84f">
+        <div class="kpi-label">Vencem Hoje</div>
+        <div class="kpi-value" style="color:var(--warning)">${fmtVal(hoje.reduce((s, r) => s + parseVal(r['Total']), 0))}</div>
+        <div class="kpi-sub">${hoje.length} títulos</div>
+        </div>
+        <div class="kpi" style="--kpi-color:#4fca8e">
+        <div class="kpi-label">A Vencer</div>
+        <div class="kpi-value" style="color:var(--success)">${fmtVal(data.filter(r => getStatus(r) === 'ok').reduce((s, r) => s + parseVal(r['Total']), 0))}</div>
+        <div class="kpi-sub">${data.filter(r => getStatus(r) === 'ok').length} títulos</div>
+        </div>
+        <div class="kpi" style="--kpi-color:var(--serrinha)">
+        <div class="kpi-label">📍 Serrinha</div>
+        <div class="kpi-value" style="color:var(--serrinha)">${fmtVal(serrRows.reduce((s, r) => s + parseVal(r['Total']), 0))}</div>
+        <div class="kpi-sub">${serrRows.length} títulos</div>
+        </div>
+    `;
+        }
+
+        // ──────────────────────────────────────────────
+        // TABLE HEAD
+        // ──────────────────────────────────────────────
+        const COLS = [
+            { key: 'Vencimento', label: 'Vencimento' },
+            { key: 'Beneficiado', label: 'Beneficiado' },
+            { key: 'Descrição', label: 'Descrição' },
+            { key: 'Numero doc.', label: 'Nº Doc' },
+            { key: 'Atraso', label: 'Atraso (d)' },
+            { key: 'Total', label: 'Total' },
+            { key: 'status', label: 'Status' },
+        ];
+
+        function buildHead() {
+            const tr = document.getElementById('tableHead');
+            tr.innerHTML = COLS.map(c => `
+        <th onclick="sortBy('${c.key}')" class="${sortCol === c.key ? 'sorted' : ''}">
+        ${c.label} <span class="sort-icon">${sortCol === c.key ? (sortAsc ? '↑' : '↓') : '⇅'}</span>
+        </th>
+    `).join('');
+        }
+
+        // ──────────────────────────────────────────────
+        // ROWS
+        // ──────────────────────────────────────────────
+        function rowHtml(row) {
+            const s = getStatus(row);
+            const srv = isSerrinha(row);
+            const statusHtml = s === 'vencido'
+                ? '<span class="status-badge status-vencido">Vencido</span>'
+                : s === 'hoje'
+                    ? '<span class="status-badge status-hoje">Hoje</span>'
+                    : '<span class="status-badge status-ok">A Vencer</span>';
+            const atraso = row['Atraso'] ? Math.round(row['Atraso']) + 'd' : '—';
+            return `<tr>
+        <td class="mono">${fmtDt(row['Vencimento'])}</td>
+        <td class="${srv ? 'fornec-serrinha' : ''}">${row['Beneficiado']}${srv ? ' <small style="color:var(--serrinha);font-size:.65rem">📍</small>' : ''}</td>
+        <td style="color:var(--muted);font-size:.8rem">${row['Descrição'] || '-'}</td>
+        <td class="mono" style="color:var(--muted)">${row['Numero doc.'] || '-'}</td>
+        <td class="mono" style="text-align:center;color:${row['Atraso'] > 0 ? 'var(--danger)' : 'var(--muted)'}">${atraso}</td>
+        <td class="valor-cell">${fmtVal(parseVal(row['Total']))}</td>
+        <td>${statusHtml}</td>
+    </tr>`;
+        }
+
+        // ──────────────────────────────────────────────
+        // RENDER
+        // ──────────────────────────────────────────────
+        function renderAll() {
+            const data = getFiltered();
+            renderKPIs(data);
+            buildHead();
+            const sorted = sortData(data);
+            const tbody = document.getElementById('tableBody');
+            document.getElementById('resultInfo').textContent = `${data.length} registro(s) · ${fmtVal(data.reduce((s, r) => s + parseVal(r['Total']), 0))}`;
+
+            if (data.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="${COLS.length}" class="empty-state"><p>Nenhum resultado encontrado.</p></td></tr>`;
+                return;
+            }
+
+            if (agrupamento === 'none') {
+                tbody.innerHTML = sorted.map(rowHtml).join('');
+                return;
+            }
+
+            // Group
+            const groups = {};
+            sorted.forEach(row => {
+                let key;
+                if (agrupamento === 'fornecedor') key = row['Beneficiado'];
+                else {
+                    const dt = parseDt(row['Vencimento']);
+                    key = dt ? dt.toLocaleString('pt-BR', { month: 'long', year: 'numeric' }) : 'Sem Data';
+                }
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(row);
+            });
+
+            let html = '';
+            Object.entries(groups).forEach(([key, rows]) => {
+                const sub = rows.reduce((s, r) => s + parseVal(r['Total']), 0);
+
+                // Cabeçalho do Grupo (Sempre aparece e já tem o total)
+                html += `
+    <tr class="group-header-inner">
+        <td colspan="${COLS.length}">
+            <div class="group-content">
+                <span style="color:var(--accent); font-weight:600">${key}</span>
+                <span style="font-family:'DM Mono'; color:var(--text)">
+                    ${fmtVal(sub)} 
+                    <span style="color:var(--muted); font-weight:400; font-size:0.75rem"> (${rows.length} itens)</span>
+                </span>
+            </div>
+        </td>
+    </tr>`;
+
+                // LÓGICA DE DETALHE:
+                // Só renderiza as linhas individuais se o agrupamento NÃO for por fornecedor
+                if (agrupamento !== 'fornecedor') {
+                    html += rows.map(rowHtml).join('');
+
+                    // Linha de subtotal (Opcional quando tem detalhes)
+                    html += `<tr class="group-subtotal">
+            <td colspan="${COLS.length - 1}"></td>
+            <td class="valor-cell" style="color:var(--accent); font-weight:600">${fmtVal(sub)}</td>
+        </tr>`;
+                }
+            });
+            tbody.innerHTML = html;
+        }
+
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+
+</html>
